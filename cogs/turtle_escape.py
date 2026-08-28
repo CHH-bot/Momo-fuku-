@@ -45,8 +45,7 @@ class TurtleEscape(commands.Cog):
                                 self.stories[filename_no_ext] = story_data
                                 
                             print(f"✅ 成功載入故事 [{story_id}] (檔名: {filename})", flush=True)
-                    except Exception as e:
-                        print(f"❌ 讀取故事檔案失敗 [{filename}]: {e}", flush=True)
+   
 
     def save_team_states(self):
         """將隊伍狀態存檔至本地 JSON"""
@@ -96,70 +95,58 @@ class TurtleEscape(commands.Cog):
     @app_commands.command(name="建立隊伍", description="開啟專屬私密討論串開始密室海龜湯")
     @app_commands.describe(故事編號="選擇欲挑戰的故事名稱/ID")
     async def create_team(self, interaction: discord.Interaction, 故事編號: str):
-        story = self.stories.get(故事編號)
-        if not story:
-            await interaction.response.send_message(f"❌ 找不到故事『{故事編號}』！請確認故事 ID。", ephemeral=True)
-            return
+        # 1. 立即延遲回應，告訴 Discord「收到指令了，處理中...」（解決 3 秒逾時問題）
+        await interaction.response.defer(ephemeral=True)
 
-        thread = await interaction.channel.create_thread(
-            name=f"🔒【{story['title']}】- {interaction.user.display_name}的隊伍",
-            type=discord.ChannelType.private_thread,
-            auto_archive_duration=1440
-        )
-        await thread.add_user(interaction.user)
+        try:
+            story = self.stories.get(故事編號)
+            if not story:
+                await interaction.followup.send(f"❌ 找不到故事『{故事編號}』！請確認故事 ID。", ephemeral=True)
+                return
 
-        # 初始化紀錄並存檔 (統一儲存真正的 story_id)
-        real_story_id = story.get("story_id", 故事編號)
-        self.team_states[thread.id] = {
-            "story_id": real_story_id,
-            "daily_ask_count": 0,
-            "unlocked": False
-        }
-        self.save_team_states()
+            # 2. 建立私密討論串
+            thread = await interaction.channel.create_thread(
+                name=f"🔒【{story['title']}】- {interaction.user.display_name}的隊伍",
+                type=discord.ChannelType.private_thread,
+                auto_archive_duration=1440
+            )
+            await thread.add_user(interaction.user)
 
-        await interaction.response.send_message(
-            f"✅ 成功建立密室討論串！請前往 {thread.mention} 開始遊戲！", 
-            ephemeral=True
-        )
+            # 3. 初始化紀錄並存檔
+            real_story_id = story.get("story_id", 故事編號)
+            self.team_states[thread.id] = {
+                "story_id": real_story_id,
+                "daily_ask_count": 0,
+                "unlocked": False
+            }
+            self.save_team_states()
 
-        daily_limit = story.get("rules", {}).get("daily_ask_limit", 3)
-        turtle_surface = story.get("turtle_soup", {}).get("surface", "請透過 `/查看` 探索現場...")
+            # 4. 由於前面用了 defer()，這裡改用 followup.send() 發送訊息
+            await interaction.followup.send(
+                f"✅ 成功建立密室討論串！請前往 {thread.mention} 開始遊戲！", 
+                ephemeral=True
+            )
 
-        intro_text = (
-            f"**【故事：{story['title']}】**\n\n"
-            f"**背景簡介：**\n{story.get('introduction', '無')}\n\n"
-            f"**海龜湯湯面：**\n> {turtle_surface}\n\n"
-            f"**遊戲指令指南：**\n"
-            f"• `/查看` ：搜尋密室房間內的區域與道具線索\n"
-            f"• `/提問 [問題]` ：向 AI 湯主提問（僅回答：是 / 不是 / 與真相無關，上限 {daily_limit} 次）\n"
-            f"• `/分析推理 [分析]` ：提交你們的推理，讓 AI 湯主評估還原度並給予提示\n"
-            f"• `/解鎖 [密碼]` ：輸入密碼驗證解鎖通關\n\n"
-            f"*隊友可直接在此討論串內打字討論，一般聊天不會扣除提問額度！*"
-        )
-        await thread.send(intro_text)
+            # 5. 發送遊戲初始導覽至討論串
+            daily_limit = story.get("rules", {}).get("daily_ask_limit", 3)
+            turtle_surface = story.get("turtle_soup", {}).get("surface", "請透過 `/查看` 探索現場...")
 
-    @create_team.autocomplete("故事編號")
-    async def story_autocomplete(self, interaction: discord.Interaction, current: str):
-        choices = []
-        seen_ids = set()
+            intro_text = (
+                f"**【故事：{story['title']}】**\n\n"
+                f"**背景簡介：**\n{story.get('introduction', '無')}\n\n"
+                f"**海龜湯湯面：**\n> {turtle_surface}\n\n"
+                f"**遊戲指令指南：**\n"
+                f"• `/查看` ：搜尋密室房間內的區域與道具線索\n"
+                f"• `/提問 [問題]` ：向 AI 湯主提問（僅回答：是 / 不是 / 與真相無關，上限 {daily_limit} 次）\n"
+                f"• `/分析推理 [分析]` ：提交你們的推理，讓 AI 湯主評估還原度並給予提示\n"
+                f"• `/解鎖 [密碼]` ：輸入密碼驗證解鎖通關\n\n"
+                f"*隊友可直接在此討論串內打字討論，一般聊天不會扣除提問額度！*"
+            )
+            await thread.send(intro_text)
 
-        for sid, story in self.stories.items():
-            real_id = story.get("story_id", sid)
-            title = story.get("title", real_id)
-            
-            # 避免別名重複顯示在選單中
-            if real_id in seen_ids:
-                continue
-            seen_ids.add(real_id)
-
-            display_name = f"【story_1】{title}" if "shadow_in_photo" in real_id else f"{real_id} - {title}"
-
-            if (current.lower() in display_name.lower() or 
-                current.lower() in real_id.lower() or 
-                "story_1" in current.lower()):
-                choices.append(app_commands.Choice(name=display_name, value=real_id))
-
-        return choices[:25] # Discord autocomplete 最多支援 25 個選項
+        except Exception as e:
+            print(f"❌ 建立隊伍時發生錯誤: {e}", flush=True)
+            await interaction.followup.send(f"⚠️ 建立隊伍失敗：`{e}`", ephemeral=True)
 
     # ================= 2. 斜線指令：/查看 =================
     @app_commands.command(name="查看", description="檢視密室內可搜尋的區域與道具線索")
