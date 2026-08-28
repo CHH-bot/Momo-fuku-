@@ -21,8 +21,10 @@ class TurtleEscape(commands.Cog):
         self.load_team_states() # 開機時自動載入進度
 
     def load_all_stories(self):
-        """動態載入 data/turtle_escape/ 底下的故事 JSON"""
+        """動態載入 data/turtle_escape/ 底下的故事 JSON (支援 story_1_ 等前綴)"""
         data_dir = "./data/turtle_escape"
+        self.stories.clear()
+        
         if os.path.exists(data_dir):
             for filename in os.listdir(data_dir):
                 if filename.endswith(".json"):
@@ -30,8 +32,19 @@ class TurtleEscape(commands.Cog):
                     try:
                         with open(filepath, "r", encoding="utf-8") as f:
                             story_data = json.load(f)
-                            story_id = story_data.get("story_id", filename[:-5])
+                            
+                            # 優先取 JSON 內的 story_id，若無則拿檔名 (去字尾 .json)
+                            story_id = story_data.get("story_id") or filename[:-5]
+                            
+                            # 儲存故事資料
                             self.stories[story_id] = story_data
+                            
+                            # 若檔名帶有前綴（例如 story_1_shadow_in_photo.json），也同時作為別名 key 存入
+                            filename_no_ext = filename[:-5]
+                            if filename_no_ext != story_id:
+                                self.stories[filename_no_ext] = story_data
+                                
+                            print(f"✅ 成功載入故事 [{story_id}] (檔名: {filename})", flush=True)
                     except Exception as e:
                         print(f"❌ 讀取故事檔案失敗 [{filename}]: {e}", flush=True)
 
@@ -49,7 +62,6 @@ class TurtleEscape(commands.Cog):
         if os.path.exists(SAVE_FILE):
             try:
                 with open(SAVE_FILE, "r", encoding="utf-8") as f:
-                    # JSON 的 key 是字串，轉回 int 作為頻道 ID
                     data = json.load(f)
                     self.team_states = {int(k): v for k, v in data.items()}
                 print(f"💾 成功載入 {len(self.team_states)} 個進行中的隊伍紀錄！", flush=True)
@@ -86,7 +98,7 @@ class TurtleEscape(commands.Cog):
     async def create_team(self, interaction: discord.Interaction, 故事編號: str):
         story = self.stories.get(故事編號)
         if not story:
-            await interaction.response.send_message("❌ 找不到指定的故事！請確認故事 ID。", ephemeral=True)
+            await interaction.response.send_message(f"❌ 找不到故事『{故事編號}』！請確認故事 ID。", ephemeral=True)
             return
 
         thread = await interaction.channel.create_thread(
@@ -96,9 +108,10 @@ class TurtleEscape(commands.Cog):
         )
         await thread.add_user(interaction.user)
 
-        # 初始化紀錄並存檔
+        # 初始化紀錄並存檔 (統一儲存真正的 story_id)
+        real_story_id = story.get("story_id", 故事編號)
         self.team_states[thread.id] = {
-            "story_id": story["story_id"],
+            "story_id": real_story_id,
             "daily_ask_count": 0,
             "unlocked": False
         }
@@ -109,13 +122,17 @@ class TurtleEscape(commands.Cog):
             ephemeral=True
         )
 
+        daily_limit = story.get("rules", {}).get("daily_ask_limit", 3)
+        turtle_surface = story.get("turtle_soup", {}).get("surface", "請透過 `/查看` 探索現場...")
+
         intro_text = (
             f"**【故事：{story['title']}】**\n\n"
             f"**背景簡介：**\n{story.get('introduction', '無')}\n\n"
+            f"**海龜湯湯面：**\n> {turtle_surface}\n\n"
             f"**遊戲指令指南：**\n"
             f"• `/查看` ：搜尋密室房間內的區域與道具線索\n"
-            f"• `/提問 [問題]` ：向 AI 湯主提問 (每日限制 {story.get('rules', {}).get('daily_ask_limit', 3)} 次)\n"
-            f"• `/分析推理 [分析]` ：讓 AI 湯主評估你們目前的真相還原度\n"
+            f"• `/提問 [問題]` ：向 AI 湯主提問（僅回答：是 / 不是 / 與真相無關，上限 {daily_limit} 次）\n"
+            f"• `/分析推理 [分析]` ：提交你們的推理，讓 AI 湯主評估還原度並給予提示\n"
             f"• `/解鎖 [密碼]` ：輸入密碼驗證解鎖通關\n\n"
             f"*隊友可直接在此討論串內打字討論，一般聊天不會扣除提問額度！*"
         )
@@ -123,11 +140,26 @@ class TurtleEscape(commands.Cog):
 
     @create_team.autocomplete("故事編號")
     async def story_autocomplete(self, interaction: discord.Interaction, current: str):
-        return [
-            app_commands.Choice(name=s.get("title", s["story_id"]), value=s["story_id"])
-            for s in self.stories.values()
-            if current.lower() in s.get("title", "").lower() or current.lower() in s["story_id"].lower()
-        ]
+        choices = []
+        seen_ids = set()
+
+        for sid, story in self.stories.items():
+            real_id = story.get("story_id", sid)
+            title = story.get("title", real_id)
+            
+            # 避免別名重複顯示在選單中
+            if real_id in seen_ids:
+                continue
+            seen_ids.add(real_id)
+
+            display_name = f"【story_1】{title}" if "shadow_in_photo" in real_id else f"{real_id} - {title}"
+
+            if (current.lower() in display_name.lower() or 
+                current.lower() in real_id.lower() or 
+                "story_1" in current.lower()):
+                choices.append(app_commands.Choice(name=display_name, value=real_id))
+
+        return choices[:25] # Discord autocomplete 最多支援 25 個選項
 
     # ================= 2. 斜線指令：/查看 =================
     @app_commands.command(name="查看", description="檢視密室內可搜尋的區域與道具線索")
@@ -172,8 +204,8 @@ class TurtleEscape(commands.Cog):
         await interaction.response.send_message("**你想搜查密室的哪個區域？**", view=view)
 
     # ================= 3. 斜線指令：/提問 (對接 Gemini AI) =================
-    @app_commands.command(name="提問", description="向 AI 湯主提問 (回答：是/不是/無關)")
-    @app_commands.describe(問題="請輸入你想確認的細節（例如：雨衣是小明的嗎？）")
+    @app_commands.command(name="提問", description="向 AI 湯主提問 (回答：是/不是/與真相無關)")
+    @app_commands.describe(問題="請輸入你想確認的細節（例如：照片裡的人是小明嗎？）")
     async def ask_question(self, interaction: discord.Interaction, 問題: str):
         state = self.team_states.get(interaction.channel_id)
         if not state:
@@ -186,7 +218,7 @@ class TurtleEscape(commands.Cog):
         if state["daily_ask_count"] >= max_asks:
             await interaction.response.send_message(
                 f"⚠️ **今日提問額度已用盡 ({max_asks}/{max_asks})！**\n"
-                f"請整理已有線索與隊友討論，或使用 `/解鎖 [密碼]` 嘗試驗證解鎖。", 
+                f"請整理已有線索與隊友討論，使用 `/分析推理` 確認方向，或使用 `/解鎖 [密碼]` 嘗試通關。", 
                 ephemeral=True
             )
             return
@@ -196,17 +228,16 @@ class TurtleEscape(commands.Cog):
         try:
             api_key = os.getenv("GEMINI_API_KEY")
             if not api_key:
-                await interaction.followup.send("⚠️ 尚未偵測到 `GEMINI_API_KEY`，請檢查 Render 後台環境變數。")
+                await interaction.followup.send("⚠️ 尚未偵測到 `GEMINI_API_KEY`，請檢查環境變數。")
                 return
 
             genai.configure(api_key=api_key)
             
-            # 從真相對應資料建立引導提示
             truth_summary = story.get("truth", {}).get("summary") or story.get("turtle_soup", {}).get("truth", "")
             system_prompt = (
                 f"你現在是海龜湯遊戲主持人。\n"
                 f"完整真相：【{truth_summary}】\n"
-                f"規則：請根據真相回答玩家問題，你只能回答『是』、『不是』或『與真相無關』，絕不能暴雷完整答案。"
+                f"規則：請根據真相嚴格回答玩家提出的問題。你只能回答『是』、『不是』或『與真相無關』這三種答案之一，嚴禁提供額外的解釋或暴雷。"
             )
 
             prompt = f"{system_prompt}\n\n玩家提出的問題：『{問題}』"
@@ -220,7 +251,6 @@ class TurtleEscape(commands.Cog):
 
             ai_answer = response.text.strip()
 
-            # 更新額度並存檔
             state["daily_ask_count"] += 1
             self.save_team_states()
 
@@ -237,7 +267,7 @@ class TurtleEscape(commands.Cog):
 
     # ================= 4. 斜線指令：/分析推理 (AI 比對還原度) =================
     @app_commands.command(name="分析推理", description="讓 AI 湯主評估你們對海龜湯真相的推理還原度")
-    @app_commands.describe(你的推理="請寫下你認為的事情經過與真相（例如：跟蹤狂躲在衣櫃裡...）")
+    @app_commands.describe(你的推理="請寫下你認為的事情經過與真相")
     async def analyze_truth(self, interaction: discord.Interaction, 你的推理: str):
         state = self.team_states.get(interaction.channel_id)
         if not state:
@@ -307,7 +337,6 @@ class TurtleEscape(commands.Cog):
             await interaction.response.send_message("⚠️ 找不到故事資料！", ephemeral=True)
             return
 
-        # 相容兩種密碼欄位結構 (rules.unlock_code 或 turtle_soup.password)
         correct_code = str(
             story.get("rules", {}).get("unlock_code") or 
             story.get("turtle_soup", {}).get("password", "")
