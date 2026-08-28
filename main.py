@@ -45,11 +45,11 @@ async def main():
     async with bot:
         # 載入所有 Cog
         await load_extensions()
-        # 啟動 Bot (請確保已設定環境變數 DISCORD_TOKEN)
-        token = os.getenv("DISCORD_TOKEN")
+        # 啟動 Bot (請確保已設定環境變數 BOT_TOKEN)
+        token = os.getenv("BOT_TOKEN")
         if not token:
             print(
-                "⚠️ 找不到 DISCORD_TOKEN 環境變數，請在環境變數或 .env 中設定！"
+                "⚠️ 找不到 BOT_TOKEN 環境變數，請在環境變數或 .env 中設定！"
             )
             return
         await bot.start(token)
