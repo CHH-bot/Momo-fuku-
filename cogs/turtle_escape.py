@@ -5,20 +5,23 @@ import google.generativeai as genai
 from discord import app_commands
 from discord.ext import commands
 
-# 1. 初始化 Gemini API (讀取環境變數 GEMINI_API_KEY)
+# 1. 初始化 Gemini API
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
+
+SAVE_FILE = "./data/turtle_escape_teams.json"
 
 class TurtleEscape(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.stories = {}
-        self.team_states = {}  # 儲存每個 Thread/隊伍 的遊戲進度狀態
+        self.team_states = {}
         self.load_all_stories()
+        self.load_team_states() # 開機時自動載入進度
 
     def load_all_stories(self):
-        """動態載入 data/turtle_escape/ 底下的所有 JSON 故事檔"""
+        """動態載入 data/turtle_escape/ 底下的故事 JSON"""
         data_dir = "./data/turtle_escape"
         if os.path.exists(data_dir):
             for filename in os.listdir(data_dir):
@@ -29,9 +32,29 @@ class TurtleEscape(commands.Cog):
                             story_data = json.load(f)
                             story_id = story_data.get("story_id", filename[:-5])
                             self.stories[story_id] = story_data
-                            print(f"📖 成功載入密室故事: {story_data.get('title', story_id)}", flush=True)
                     except Exception as e:
                         print(f"❌ 讀取故事檔案失敗 [{filename}]: {e}", flush=True)
+
+    def save_team_states(self):
+        """將隊伍狀態存檔至本地 JSON"""
+        try:
+            os.makedirs(os.path.dirname(SAVE_FILE), exist_ok=True)
+            with open(SAVE_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.team_states, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"❌ 存檔隊伍狀態失敗: {e}", flush=True)
+
+    def load_team_states(self):
+        """從本地 JSON 載入隊伍狀態（防重啟失效）"""
+        if os.path.exists(SAVE_FILE):
+            try:
+                with open(SAVE_FILE, "r", encoding="utf-8") as f:
+                    # JSON 的 key 是字串，轉回 int 作為頻道 ID
+                    data = json.load(f)
+                    self.team_states = {int(k): v for k, v in data.items()}
+                print(f"💾 成功載入 {len(self.team_states)} 個進行中的隊伍紀錄！", flush=True)
+            except Exception as e:
+                print(f"❌ 載入隊伍紀錄失敗: {e}", flush=True)
 
     # ================= 1. 斜線指令：/建立隊伍 =================
     @app_commands.command(name="建立隊伍", description="開啟專屬私密討論串開始密室海龜湯")
@@ -42,30 +65,26 @@ class TurtleEscape(commands.Cog):
             await interaction.response.send_message("❌ 找不到指定的故事！請確認故事 ID。", ephemeral=True)
             return
 
-        # 1. 建立私密討論串 (Private Thread)
         thread = await interaction.channel.create_thread(
-            name=f"🔒【{story['title']}】-{interaction.user.display_name}的隊伍",
+            name=f"🔒【{story['title']}】- {interaction.user.display_name}的隊伍",
             type=discord.ChannelType.private_thread,
             auto_archive_duration=1440
         )
-
-        # 2. 將創建者拉入討論串
         await thread.add_user(interaction.user)
 
-        # 3. 初始化隊伍遊戲狀態
+        # 初始化紀錄並存檔
         self.team_states[thread.id] = {
             "story_id": story["story_id"],
             "daily_ask_count": 0,
             "unlocked": False
         }
+        self.save_team_states()
 
-        # 4. 回覆開覆狀態 (僅本人可見)
         await interaction.response.send_message(
             f"✅ 成功建立密室討論串！請前往 {thread.mention} 開始遊戲！", 
             ephemeral=True
         )
 
-        # 5. 在討論串發送開場白與海龜湯湯面
         intro_text = (
             f"**【故事：{story['title']}】**\n\n"
             f"**背景簡介：**\n{story.get('introduction', '無')}\n\n"
@@ -78,7 +97,6 @@ class TurtleEscape(commands.Cog):
         )
         await thread.send(intro_text)
 
-    # 動態選單：自動帶出可選擇的故事 ID
     @create_team.autocomplete("故事編號")
     async def story_autocomplete(self, interaction: discord.Interaction, current: str):
         return [
@@ -102,7 +120,6 @@ class TurtleEscape(commands.Cog):
             await interaction.response.send_message("📌 當前環境沒有可搜尋的區域。", ephemeral=True)
             return
 
-        # 構建下拉選單
         options = []
         for scene_key, scene_info in scenes.items():
             options.append(discord.SelectOption(
@@ -142,7 +159,6 @@ class TurtleEscape(commands.Cog):
         story = self.stories.get(state["story_id"])
         max_asks = story.get("rules", {}).get("daily_ask_limit", 3)
 
-        # 檢查提問上限
         if state["daily_ask_count"] >= max_asks:
             await interaction.response.send_message(
                 f"⚠️ **今日提問額度已用盡 ({max_asks}/{max_asks})！**\n"
@@ -151,21 +167,31 @@ class TurtleEscape(commands.Cog):
             )
             return
 
-        await interaction.response.defer() # 延遲回應等待 Gemini 運算
+        await interaction.response.defer()
 
         try:
+            # 即時檢查與配置 API Key
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                await interaction.followup.send("⚠️ 尚未偵測到 `GEMINI_API_KEY`，請檢查 Render 後台環境變數。")
+                return
+
+            genai.configure(api_key=api_key)
             system_prompt = story.get("turtle_soup", {}).get(
                 "system_prompt",
                 "你現在是海龜湯主持人。只能回答『是』、『不是』或『與真相無關』。"
             )
+
             model = genai.GenerativeModel("gemini-1.5-flash")
             prompt = f"{system_prompt}\n\n玩家提出的問題：『{問題}』"
             
             response = model.generate_content(prompt)
             ai_answer = response.text.strip()
 
-            # 扣除額度
+            # 更新額度並存檔
             state["daily_ask_count"] += 1
+            self.save_team_states()
+
             remains = max_asks - state["daily_ask_count"]
 
             await interaction.followup.send(
@@ -175,7 +201,7 @@ class TurtleEscape(commands.Cog):
             )
         except Exception as e:
             print(f"Gemini API 錯誤: {e}", flush=True)
-            await interaction.followup.send("⚠️ 創世神連線繁忙或未設定 GEMINI_API_KEY，請稍後再試。")
+            await interaction.followup.send(f"⚠️ 連線至 Gemini 時發生錯誤：`{e}`")
 
     # ================= 4. 斜線指令：/解鎖 =================
     @app_commands.command(name="解鎖", description="輸入密碼解鎖通關")
@@ -191,6 +217,7 @@ class TurtleEscape(commands.Cog):
 
         if 密碼.strip() == correct_code:
             state["unlocked"] = True
+            self.save_team_states()
             truth_summary = story.get("truth", {}).get("summary") or story.get("turtle_soup", {}).get("truth", "恭喜通關！")
             
             await interaction.response.send_message(
@@ -201,8 +228,5 @@ class TurtleEscape(commands.Cog):
         else:
             await interaction.response.send_message(f"❌ **密碼錯誤！** ({密碼}) 無法開啟鎖頭，請繼續搜尋線索！", ephemeral=True)
 
-# ----------------------------------------------------
-# 關鍵：discord.py 載入 Cog 的 Entry Point 入口點
-# ----------------------------------------------------
 async def setup(bot: commands.Bot):
     await bot.add_cog(TurtleEscape(bot))
