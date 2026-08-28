@@ -1,13 +1,20 @@
 import os
 import json
 import discord
+import google.generativeai as genai
 from discord import app_commands
 from discord.ext import commands
+
+# 1. 初始化 Gemini API (讀取環境變數 GEMINI_API_KEY)
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
 
 class TurtleEscape(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.stories = {}
+        self.team_states = {}  # 儲存每個 Thread/隊伍 的遊戲進度狀態
         self.load_all_stories()
 
     def load_all_stories(self):
@@ -22,43 +29,13 @@ class TurtleEscape(commands.Cog):
                             story_data = json.load(f)
                             story_id = story_data.get("story_id", filename[:-5])
                             self.stories[story_id] = story_data
-                            print(f"📖 成功載入密室故事: {story_data.get('title', story_id)}")
+                            print(f"📖 成功載入密室故事: {story_data.get('title', story_id)}", flush=True)
                     except Exception as e:
-                        print(f"❌ 讀取故事檔案失敗 [{filename}]: {e}")
+                        print(f"❌ 讀取故事檔案失敗 [{filename}]: {e}", flush=True)
 
-    # ----------------------------------------------------
-    # 中文斜線指令定義
-    # ----------------------------------------------------
-
-    @app_commands.command(name="建立隊伍", description="建立密室海龜湯專屬討論串與隊伍")
-    async def create_team(self, interaction: discord.Interaction):
-        await interaction.response.send_message("🔍 正在為你準備密室逃脫專屬討論串...", ephemeral=True)
-
-    @app_commands.command(name="查看", description="查看當前密室場景與搜集到的線索")
-    async def view_scene(self, interaction: discord.Interaction):
-        await interaction.response.send_message("📌 當前搜尋到的線索與物件：\n- 床頭櫃的手機\n- 牆角的保險盒", ephemeral=True)
-
-    @app_commands.command(name="提問", description="向海龜湯主持人（Gemini AI）進行判定提問")
-    @app_commands.describe(問題="請輸入你想確認的細節（例如：雨衣是小明的嗎？）")
-    async def ask_question(self, interaction: discord.Interaction, 問題: str):
-        await interaction.response.defer() # 預先等待，防止 API 回應超時
-        # 此處放置 Gemini API 判定邏輯
-        await interaction.followup.send(f"❓ 你的提問：`{問題}`\n🤖 主持人判定：**【是】**")
-
-    @app_commands.command(name="解鎖", description="輸入 4 位數密碼嘗試打開保險盒解鎖關卡")
-    @app_commands.describe(密碼="輸入解密密碼（例如：0412）")
-    async def unlock_safe(self, interaction: discord.Interaction, 密碼: str):
-        if 密碼 == "0412":
-            await interaction.response.send_message("🎉 **解鎖成功！** 你打開了保險盒並發現了真相！")
-        else:
-            await interaction.response.send_message("❌ **密碼錯誤！** 保險盒發出了嗶嗶警報聲...", ephemeral=True)
-
-# ----------------------------------------------------
-# 關鍵：discord.py 載入 Cog 的 Entry Point 入口點
-# ----------------------------------------------------
-async def setup(bot: commands.Bot):
-    await bot.add_cog(TurtleEscape(bot))
+    # ================= 1. 斜線指令：/建立隊伍 =================
     @app_commands.command(name="建立隊伍", description="開啟專屬私密討論串開始密室海龜湯")
+    @app_commands.describe(故事編號="選擇欲挑戰的故事名稱/ID")
     async def create_team(self, interaction: discord.Interaction, 故事編號: str):
         story = self.stories.get(故事編號)
         if not story:
@@ -84,7 +61,7 @@ async def setup(bot: commands.Bot):
 
         # 4. 回覆開覆狀態 (僅本人可見)
         await interaction.response.send_message(
-            f"✅成功建立密室討論串！請前往 {thread.mention} 開始遊戲！", 
+            f"✅ 成功建立密室討論串！請前往 {thread.mention} 開始遊戲！", 
             ephemeral=True
         )
 
@@ -105,9 +82,9 @@ async def setup(bot: commands.Bot):
     @create_team.autocomplete("故事編號")
     async def story_autocomplete(self, interaction: discord.Interaction, current: str):
         return [
-            app_commands.Choice(name=s["title"], value=s["story_id"])
+            app_commands.Choice(name=s.get("title", s["story_id"]), value=s["story_id"])
             for s in self.stories.values()
-            if current.lower() in s["title"].lower() or current.lower() in s["story_id"].lower()
+            if current.lower() in s.get("title", "").lower() or current.lower() in s["story_id"].lower()
         ]
 
     # ================= 2. 斜線指令：/查看 =================
@@ -115,13 +92,17 @@ async def setup(bot: commands.Bot):
     async def inspect_scene(self, interaction: discord.Interaction):
         state = self.team_states.get(interaction.channel_id)
         if not state:
-            await interaction.response.send_message("請在專屬的海龜湯私密討論串內使用此指令！", ephemeral=True)
+            await interaction.response.send_message("❌ 請在專屬的海龜湯私密討論串內使用此指令！", ephemeral=True)
             return
 
         story = self.stories.get(state["story_id"])
         scenes = story.get("scenes", {})
 
-        # 構建下拉選單選單
+        if not scenes:
+            await interaction.response.send_message("📌 當前環境沒有可搜尋的區域。", ephemeral=True)
+            return
+
+        # 構建下拉選單
         options = []
         for scene_key, scene_info in scenes.items():
             options.append(discord.SelectOption(
@@ -151,10 +132,11 @@ async def setup(bot: commands.Bot):
 
     # ================= 3. 斜線指令：/提問 (對接 Gemini AI) =================
     @app_commands.command(name="提問", description="向 AI 湯主提問 (回答：是/不是/無關)")
+    @app_commands.describe(問題="請輸入你想確認的細節（例如：雨衣是小明的嗎？）")
     async def ask_question(self, interaction: discord.Interaction, 問題: str):
         state = self.team_states.get(interaction.channel_id)
         if not state:
-            await interaction.response.send_message("請在專屬的海龜湯私密討論串內使用此指令！", ephemeral=True)
+            await interaction.response.send_message("❌ 請在專屬的海龜湯私密討論串內使用此指令！", ephemeral=True)
             return
 
         story = self.stories.get(state["story_id"])
@@ -163,7 +145,7 @@ async def setup(bot: commands.Bot):
         # 檢查提問上限
         if state["daily_ask_count"] >= max_asks:
             await interaction.response.send_message(
-                f"**今日提問額度已用盡 ({max_asks}/{max_asks})！**\n"
+                f"⚠️ **今日提問額度已用盡 ({max_asks}/{max_asks})！**\n"
                 f"請整理已有線索與隊友討論，或使用 `/解鎖 [密碼]` 嘗試驗證解鎖。", 
                 ephemeral=True
             )
@@ -172,7 +154,6 @@ async def setup(bot: commands.Bot):
         await interaction.response.defer() # 延遲回應等待 Gemini 運算
 
         try:
-            # 設定 Gemini API Prompt
             system_prompt = story.get("turtle_soup", {}).get(
                 "system_prompt",
                 "你現在是海龜湯主持人。只能回答『是』、『不是』或『與真相無關』。"
@@ -189,19 +170,20 @@ async def setup(bot: commands.Bot):
 
             await interaction.followup.send(
                 f"**玩家提問：** {問題}\n"
-                f"**AI 湯主回應：** {ai_answer}\n"
+                f"🤖 **AI 湯主回應：** {ai_answer}\n"
                 f"*(今日剩餘提問額度：{remains}/{max_asks})*"
             )
         except Exception as e:
-            print(f"Gemini API 錯誤: {e}")
-            await interaction.followup.send("創世神連線繁忙中，請稍後再試。")
+            print(f"Gemini API 錯誤: {e}", flush=True)
+            await interaction.followup.send("⚠️ 創世神連線繁忙或未設定 GEMINI_API_KEY，請稍後再試。")
 
     # ================= 4. 斜線指令：/解鎖 =================
     @app_commands.command(name="解鎖", description="輸入密碼解鎖通關")
+    @app_commands.describe(密碼="輸入驗證密碼")
     async def unlock(self, interaction: discord.Interaction, 密碼: str):
         state = self.team_states.get(interaction.channel_id)
         if not state:
-            await interaction.response.send_message("請在專屬的海龜湯私密討論串內使用此指令！", ephemeral=True)
+            await interaction.response.send_message("❌ 請在專屬的海龜湯私密討論串內使用此指令！", ephemeral=True)
             return
 
         story = self.stories.get(state["story_id"])
@@ -209,17 +191,18 @@ async def setup(bot: commands.Bot):
 
         if 密碼.strip() == correct_code:
             state["unlocked"] = True
-            truth_summary = story.get("truth", {}).get("summary") or story.get("turtle_soup", {}).get("truth")
+            truth_summary = story.get("truth", {}).get("summary") or story.get("turtle_soup", {}).get("truth", "恭喜通關！")
             
             await interaction.response.send_message(
-                f"**【解鎖成功！】** 密碼正確 ({密碼})！\n\n"
-                f"**【海龜湯完整真相揭密】**\n{truth_summary}\n\n"
+                f"🎉 **【解鎖成功！】** 密碼正確 ({密碼})！\n\n"
+                f"📖 **【海龜湯完整真相揭密】**\n{truth_summary}\n\n"
                 f"恭喜你們隊伍成功逃脫！"
             )
         else:
             await interaction.response.send_message(f"❌ **密碼錯誤！** ({密碼}) 無法開啟鎖頭，請繼續搜尋線索！", ephemeral=True)
 
-# Cog 載入函式
+# ----------------------------------------------------
+# 關鍵：discord.py 載入 Cog 的 Entry Point 入口點
+# ----------------------------------------------------
 async def setup(bot: commands.Bot):
-    await bot.add_cog(TurtleEscapeCog(bot))
-
+    await bot.add_cog(TurtleEscape(bot))
