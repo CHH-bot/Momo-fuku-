@@ -1,39 +1,63 @@
 import os
 import json
-import glob
 import discord
-from discord.ext import commands
 from discord import app_commands
-import google.generativeai as genai
+from discord.ext import commands
 
-# 初始化 Google Gemini API (需在環境變數或系統中設定 GEMINI_API_KEY)
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-
-class TurtleEscapeCog(commands.Cog):
+class TurtleEscape(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.stories = {}
-        # 記憶體內紀錄隊伍狀態: { thread_id: { "story_id": ..., "daily_ask_count": 0, "unlocked": False } }
-        self.team_states = {}
         self.load_all_stories()
 
     def load_all_stories(self):
-        """動態讀取 data/turtle_escape/ 資料夾下的所有 JSON 故事檔案"""
-        json_files = glob.glob("data/turtle_escape/*.json")
-        for file_path in json_files:
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    story_data = json.load(f)
-                    story_id = story_data.get("story_id")
-                    if story_id:
-                        self.stories[story_id] = story_data
-                        print(f"✅ 成功載入密室故事: {story_data.get('title')} ({story_id})")
-            except Exception as e:
-                print(f"❌ 載入故事檔案 {file_path} 失敗: {e}")
+        """動態載入 data/turtle_escape/ 底下的所有 JSON 故事檔"""
+        data_dir = "./data/turtle_escape"
+        if os.path.exists(data_dir):
+            for filename in os.listdir(data_dir):
+                if filename.endswith(".json"):
+                    filepath = os.path.join(data_dir, filename)
+                    try:
+                        with open(filepath, "r", encoding="utf-8") as f:
+                            story_data = json.load(f)
+                            story_id = story_data.get("story_id", filename[:-5])
+                            self.stories[story_id] = story_data
+                            print(f"📖 成功載入密室故事: {story_data.get('title', story_id)}")
+                    except Exception as e:
+                        print(f"❌ 讀取故事檔案失敗 [{filename}]: {e}")
 
-    # ================= 1. 斜線指令：/建立隊伍 =================
+    # ----------------------------------------------------
+    # 中文斜線指令定義
+    # ----------------------------------------------------
+
+    @app_commands.command(name="建立隊伍", description="建立密室海龜湯專屬討論串與隊伍")
+    async def create_team(self, interaction: discord.Interaction):
+        await interaction.response.send_message("🔍 正在為你準備密室逃脫專屬討論串...", ephemeral=True)
+
+    @app_commands.command(name="查看", description="查看當前密室場景與搜集到的線索")
+    async def view_scene(self, interaction: discord.Interaction):
+        await interaction.response.send_message("📌 當前搜尋到的線索與物件：\n- 床頭櫃的手機\n- 牆角的保險盒", ephemeral=True)
+
+    @app_commands.command(name="提問", description="向海龜湯主持人（Gemini AI）進行判定提問")
+    @app_commands.describe(問題="請輸入你想確認的細節（例如：雨衣是小明的嗎？）")
+    async def ask_question(self, interaction: discord.Interaction, 問題: str):
+        await interaction.response.defer() # 預先等待，防止 API 回應超時
+        # 此處放置 Gemini API 判定邏輯
+        await interaction.followup.send(f"❓ 你的提問：`{問題}`\n🤖 主持人判定：**【是】**")
+
+    @app_commands.command(name="解鎖", description="輸入 4 位數密碼嘗試打開保險盒解鎖關卡")
+    @app_commands.describe(密碼="輸入解密密碼（例如：0412）")
+    async def unlock_safe(self, interaction: discord.Interaction, 密碼: str):
+        if 密碼 == "0412":
+            await interaction.response.send_message("🎉 **解鎖成功！** 你打開了保險盒並發現了真相！")
+        else:
+            await interaction.response.send_message("❌ **密碼錯誤！** 保險盒發出了嗶嗶警報聲...", ephemeral=True)
+
+# ----------------------------------------------------
+# 關鍵：discord.py 載入 Cog 的 Entry Point 入口點
+# ----------------------------------------------------
+async def setup(bot: commands.Bot):
+    await bot.add_cog(TurtleEscape(bot))
     @app_commands.command(name="建立隊伍", description="開啟專屬私密討論串開始密室海龜湯")
     async def create_team(self, interaction: discord.Interaction, 故事編號: str):
         story = self.stories.get(故事編號)
