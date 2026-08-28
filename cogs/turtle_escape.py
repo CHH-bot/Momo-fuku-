@@ -147,7 +147,7 @@ class TurtleEscape(commands.Cog):
 
         await interaction.response.send_message("**你想搜查密室的哪個區域？**", view=view)
 
-        # ================= 3. 斜線指令：/提問 (對接 Gemini AI) =================
+            # ================= 3. 斜線指令：/提問 (對接 Gemini AI) =================
     @app_commands.command(name="提問", description="向 AI 湯主提問 (回答：是/不是/無關)")
     @app_commands.describe(問題="請輸入你想確認的細節（例如：雨衣是小明的嗎？）")
     async def ask_question(self, interaction: discord.Interaction, 問題: str):
@@ -181,8 +181,8 @@ class TurtleEscape(commands.Cog):
                 "你現在是海龜湯主持人。只能回答『是』、『不是』或『與真相無關』。"
             )
 
-            # 使用 gemini-pro 避免 1.5 版本 endpoint 404 錯誤
-            model = genai.GenerativeModel("gemini-pro")
+            # 修改為最新的模型名稱以避免 404 錯誤
+            model = genai.GenerativeModel("gemini-1.5-flash-latest")
             prompt = f"{system_prompt}\n\n玩家提出的問題：『{問題}』"
             
             response = model.generate_content(prompt)
