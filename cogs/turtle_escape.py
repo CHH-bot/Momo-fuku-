@@ -101,8 +101,11 @@ class TurtleEscape(commands.Cog):
                 await interaction.followup.send(f"❌ 找不到故事『{故事編號}』！請確認故事 ID。", ephemeral=True)
                 return
 
+            # 使用 .get("title", ...) 安全防護，防止 KeyError: 'title'
+            story_title = story.get("title", 故事編號)
+
             thread = await interaction.channel.create_thread(
-                name=f"🔒【{story['title']}】- {interaction.user.display_name}的隊伍",
+                name=f"🔒【{story_title}】- {interaction.user.display_name}的隊伍",
                 type=discord.ChannelType.private_thread,
                 auto_archive_duration=1440
             )
@@ -125,7 +128,7 @@ class TurtleEscape(commands.Cog):
             turtle_surface = story.get("turtle_soup", {}).get("surface", "請透過 `/查看` 探索現場...")
 
             intro_text = (
-                f"**【故事：{story['title']}】**\n\n"
+                f"**【故事：{story_title}】**\n\n"
                 f"**背景簡介：**\n{story.get('introduction', '無')}\n\n"
                 f"**海龜湯湯面：**\n> {turtle_surface}\n\n"
                 f"**遊戲指令指南：**\n"
@@ -147,18 +150,15 @@ class TurtleEscape(commands.Cog):
 
         for sid, story in self.stories.items():
             real_id = story.get("story_id", sid)
-            title = story.get("title", "未命名故事")
+            title = story.get("title", real_id)
             
             # 防止別名導致重複選單
             if real_id in seen_ids:
                 continue
             seen_ids.add(real_id)
 
-            # 格式化選單名稱，例如：【story_1】照片裡的側影
-            if "story_1" in real_id:
-                display_name = f"【story_1】{title}"
-            else:
-                display_name = f"【{real_id}】{title}"
+            # 格式化選單名稱
+            display_name = f"【{real_id}】{title}"
 
             # 關鍵字搜尋過濾
             if (current.lower() in display_name.lower() or 
@@ -196,7 +196,7 @@ class TurtleEscape(commands.Cog):
             chosen_key = select.values[0]
             chosen_scene = scenes[chosen_key]
             
-            detail = f"**【搜尋區域：{chosen_scene.get('name')}】**\n{chosen_scene.get('description')}\n\n**搜尋到的線索/物件：**\n"
+            detail = f"**【搜尋區域：{chosen_scene.get('name', chosen_key)}】**\n{chosen_scene.get('description', '')}\n\n**搜尋到的線索/物件：**\n"
             items = chosen_scene.get("items", {})
             for item_key, item_desc in items.items():
                 detail += f"• **{item_key}**：{item_desc}\n"
