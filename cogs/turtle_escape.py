@@ -56,6 +56,30 @@ class TurtleEscape(commands.Cog):
             except Exception as e:
                 print(f"❌ 載入隊伍紀錄失敗: {e}", flush=True)
 
+    def get_working_gemini_model(self):
+        """動態抓取目前 API Key 支援的最佳 Gemini 模型"""
+        preferred_models = [
+            "gemini-3.6-flash", 
+            "gemini-3.5-flash", 
+            "gemini-2.5-flash", 
+            "gemini-1.5-flash-latest"
+        ]
+        try:
+            available_models = [
+                m.name.replace("models/", "") 
+                for m in genai.list_models() 
+                if "generateContent" in m.supported_generation_methods
+            ]
+            for target in preferred_models:
+                if target in available_models:
+                    return target
+            
+            flash_models = [m for m in available_models if "flash" in m]
+            return flash_models[0] if flash_models else available_models[0]
+        except Exception as err:
+            print(f"無法獲取模型列表，使用預設值: {err}", flush=True)
+            return preferred_models[0]
+
     # ================= 1. 斜線指令：/建立隊伍 =================
     @app_commands.command(name="建立隊伍", description="開啟專屬私密討論串開始密室海龜湯")
     @app_commands.describe(故事編號="選擇欲挑戰的故事名稱/ID")
@@ -88,10 +112,10 @@ class TurtleEscape(commands.Cog):
         intro_text = (
             f"**【故事：{story['title']}】**\n\n"
             f"**背景簡介：**\n{story.get('introduction', '無')}\n\n"
-            f"**海龜湯湯面：**\n> {story.get('turtle_soup', {}).get('surface', '請探索現場...')}\n\n"
             f"**遊戲指令指南：**\n"
             f"• `/查看` ：搜尋密室房間內的區域與道具線索\n"
             f"• `/提問 [問題]` ：向 AI 湯主提問 (每日限制 {story.get('rules', {}).get('daily_ask_limit', 3)} 次)\n"
+            f"• `/分析推理 [分析]` ：讓 AI 湯主評估你們目前的真相還原度\n"
             f"• `/解鎖 [密碼]` ：輸入密碼驗證解鎖通關\n\n"
             f"*隊友可直接在此討論串內打字討論，一般聊天不會扣除提問額度！*"
         )
@@ -147,7 +171,7 @@ class TurtleEscape(commands.Cog):
 
         await interaction.response.send_message("**你想搜查密室的哪個區域？**", view=view)
 
-                # ================= 3. 斜線指令：/提問 (對接 Gemini AI) =================
+    # ================= 3. 斜線指令：/提問 (對接 Gemini AI) =================
     @app_commands.command(name="提問", description="向 AI 湯主提問 (回答：是/不是/無關)")
     @app_commands.describe(問題="請輸入你想確認的細節（例如：雨衣是小明的嗎？）")
     async def ask_question(self, interaction: discord.Interaction, 問題: str):
@@ -176,45 +200,18 @@ class TurtleEscape(commands.Cog):
                 return
 
             genai.configure(api_key=api_key)
-            system_prompt = story.get("turtle_soup", {}).get(
-                "system_prompt",
-                "你現在是海龜湯主持人。只能回答『是』、『不是』或『與真相無關』。"
+            
+            # 從真相對應資料建立引導提示
+            truth_summary = story.get("truth", {}).get("summary") or story.get("turtle_soup", {}).get("truth", "")
+            system_prompt = (
+                f"你現在是海龜湯遊戲主持人。\n"
+                f"完整真相：【{truth_summary}】\n"
+                f"規則：請根據真相回答玩家問題，你只能回答『是』、『不是』或『與真相無關』，絕不能暴雷完整答案。"
             )
 
             prompt = f"{system_prompt}\n\n玩家提出的問題：『{問題}』"
-            
-            # 1. 優先嘗試當前最新版本（3.6 / 3.5 / 2.5）
-            preferred_models = [
-                "gemini-3.6-flash", 
-                "gemini-3.5-flash", 
-                "gemini-2.5-flash", 
-                "gemini-1.5-flash-latest"
-            ]
-            
-            selected_model_name = None
-            
-            # 自動過濾目前 API Key 可用的 generateContent 模型
-            try:
-                available_models = [
-                    m.name.replace("models/", "") 
-                    for m in genai.list_models() 
-                    if "generateContent" in m.supported_generation_methods
-                ]
-                # 優先比對我們的喜好選單
-                for target in preferred_models:
-                    if target in available_models:
-                        selected_model_name = target
-                        break
-                
-                # 如果偏好清單都沒對上，就直接拿列表中第一個帶有 flash 的模型
-                if not selected_model_name:
-                    flash_models = [m for m in available_models if "flash" in m]
-                    selected_model_name = flash_models[0] if flash_models else available_models[0]
-            except Exception as list_err:
-                print(f"無法獲取模型列表，改用備用選單: {list_err}", flush=True)
-                selected_model_name = preferred_models[0]
+            selected_model_name = self.get_working_gemini_model()
 
-            # 2. 呼叫 Gemini
             model = genai.GenerativeModel(selected_model_name)
             response = model.generate_content(prompt)
 
@@ -225,8 +222,7 @@ class TurtleEscape(commands.Cog):
 
             # 更新額度並存檔
             state["daily_ask_count"] += 1
-            if hasattr(self, 'save_team_states'):
-                self.save_team_states()
+            self.save_team_states()
 
             remains = max_asks - state["daily_ask_count"]
 
@@ -239,7 +235,65 @@ class TurtleEscape(commands.Cog):
             print(f"Gemini API 錯誤詳情: {e}", flush=True)
             await interaction.followup.send(f"⚠️ 連線至 Gemini 時發生錯誤：`{e}`")
 
-    # ================= 4. 斜線指令：/解鎖 =================
+    # ================= 4. 斜線指令：/分析推理 (AI 比對還原度) =================
+    @app_commands.command(name="分析推理", description="讓 AI 湯主評估你們對海龜湯真相的推理還原度")
+    @app_commands.describe(你的推理="請寫下你認為的事情經過與真相（例如：跟蹤狂躲在衣櫃裡...）")
+    async def analyze_truth(self, interaction: discord.Interaction, 你的推理: str):
+        state = self.team_states.get(interaction.channel_id)
+        if not state:
+            await interaction.response.send_message("❌ 請在專屬的海龜湯私密討論串內使用此指令！", ephemeral=True)
+            return
+
+        story = self.stories.get(state["story_id"])
+        truth_info = story.get("truth", {})
+        truth_summary = truth_info.get("summary") or story.get("turtle_soup", {}).get("truth", "無真相紀錄")
+        keywords = truth_info.get("keywords", [])
+
+        await interaction.response.defer()
+
+        try:
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                await interaction.followup.send("⚠️ 尚未偵測到 `GEMINI_API_KEY`，請檢查環境變數。")
+                return
+
+            genai.configure(api_key=api_key)
+
+            analysis_prompt = f"""
+你是一名海龜湯遊戲裁判。
+
+【故事真實真相】:
+{truth_summary}
+
+【核心關鍵字列表】:
+{', '.join(keywords)}
+
+【玩家提交的推理分析】:
+{你的推理}
+
+請嚴格按照以下格式回覆玩家：
+1. **真相還原度**：[給出 0% ~ 100% 的分數]
+2. **已推出的核心重點**：[條列式列出玩家猜對的部分]
+3. **尚未揭開的盲點/遺漏**：[條列式給予適度提示，但切勿直接揭曉全部真相]
+4. **裁判建議**：[給予 1 句話引導，若還原度高可提醒尋找密碼並使用 `/解鎖`]
+"""
+            model_name = self.get_working_gemini_model()
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(analysis_prompt)
+
+            ai_analysis = response.text.strip()
+
+            await interaction.followup.send(
+                f"🧐 **【AI 湯主 - 推理分析報告】**\n"
+                f"**玩家提出的分析：**\n> {你的推理}\n\n"
+                f"{ai_analysis}"
+            )
+
+        except Exception as e:
+            print(f"Gemini API 分析錯誤: {e}", flush=True)
+            await interaction.followup.send(f"⚠️ 進行推理分析時發生錯誤：`{e}`")
+
+    # ================= 5. 斜線指令：/解鎖 =================
     @app_commands.command(name="解鎖", description="輸入密碼解鎖通關")
     @app_commands.describe(密碼="輸入驗證密碼")
     async def unlock(self, interaction: discord.Interaction, 密碼: str):
@@ -249,20 +303,37 @@ class TurtleEscape(commands.Cog):
             return
 
         story = self.stories.get(state["story_id"])
-        correct_code = str(story.get("rules", {}).get("unlock_code") or story.get("turtle_soup", {}).get("password"))
+        if not story:
+            await interaction.response.send_message("⚠️ 找不到故事資料！", ephemeral=True)
+            return
+
+        # 相容兩種密碼欄位結構 (rules.unlock_code 或 turtle_soup.password)
+        correct_code = str(
+            story.get("rules", {}).get("unlock_code") or 
+            story.get("turtle_soup", {}).get("password", "")
+        ).strip()
 
         if 密碼.strip() == correct_code:
             state["unlocked"] = True
             self.save_team_states()
+            
             truth_summary = story.get("truth", {}).get("summary") or story.get("turtle_soup", {}).get("truth", "恭喜通關！")
             
-            await interaction.response.send_message(
-                f"🎉 **【解鎖成功！】** 密碼正確 ({密碼})！\n\n"
-                f"📖 **【海龜湯完整真相揭密】**\n{truth_summary}\n\n"
-                f"恭喜你們隊伍成功逃脫！"
+            embed = discord.Embed(
+                title="🎉 【解鎖成功！恭喜通關】",
+                description=f"恭喜隊伍 **{interaction.channel.name}** 順利輸入正確密碼！",
+                color=discord.Color.green()
             )
+            embed.add_field(name="🔑 正確密碼", value=f"`{correct_code}`", inline=False)
+            embed.add_field(name="📜 海龜湯真相揭曉", value=truth_summary, inline=False)
+            embed.set_footer(text="感謝遊玩！討論串可繼續留存討論或由管理員關閉。")
+
+            await interaction.response.send_message(embed=embed)
         else:
-            await interaction.response.send_message(f"❌ **密碼錯誤！** ({密碼}) 無法開啟鎖頭，請繼續搜尋線索！", ephemeral=True)
+            await interaction.response.send_message(
+                f"❌ **密碼錯誤！** (`{密碼}`) 無法開啟鎖頭，請觀察 `/查看` 獲得的線索或用 `/分析推理` 獲取協助！", 
+                ephemeral=True
+            )
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(TurtleEscape(bot))
