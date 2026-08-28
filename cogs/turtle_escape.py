@@ -147,7 +147,7 @@ class TurtleEscape(commands.Cog):
 
         await interaction.response.send_message("**你想搜查密室的哪個區域？**", view=view)
 
-            # ================= 3. 斜線指令：/提問 (對接 Gemini AI) =================
+                # ================= 3. 斜線指令：/提問 (對接 Gemini AI) =================
     @app_commands.command(name="提問", description="向 AI 湯主提問 (回答：是/不是/無關)")
     @app_commands.describe(問題="請輸入你想確認的細節（例如：雨衣是小明的嗎？）")
     async def ask_question(self, interaction: discord.Interaction, 問題: str):
@@ -181,11 +181,46 @@ class TurtleEscape(commands.Cog):
                 "你現在是海龜湯主持人。只能回答『是』、『不是』或『與真相無關』。"
             )
 
-            # 修改為最新的模型名稱以避免 404 錯誤
-            model = genai.GenerativeModel("gemini-1.5-flash-latest")
             prompt = f"{system_prompt}\n\n玩家提出的問題：『{問題}』"
             
+            # 1. 優先嘗試當前最新版本（3.6 / 3.5 / 2.5）
+            preferred_models = [
+                "gemini-3.6-flash", 
+                "gemini-3.5-flash", 
+                "gemini-2.5-flash", 
+                "gemini-1.5-flash-latest"
+            ]
+            
+            selected_model_name = None
+            
+            # 自動過濾目前 API Key 可用的 generateContent 模型
+            try:
+                available_models = [
+                    m.name.replace("models/", "") 
+                    for m in genai.list_models() 
+                    if "generateContent" in m.supported_generation_methods
+                ]
+                # 優先比對我們的喜好選單
+                for target in preferred_models:
+                    if target in available_models:
+                        selected_model_name = target
+                        break
+                
+                # 如果偏好清單都沒對上，就直接拿列表中第一個帶有 flash 的模型
+                if not selected_model_name:
+                    flash_models = [m for m in available_models if "flash" in m]
+                    selected_model_name = flash_models[0] if flash_models else available_models[0]
+            except Exception as list_err:
+                print(f"無法獲取模型列表，改用備用選單: {list_err}", flush=True)
+                selected_model_name = preferred_models[0]
+
+            # 2. 呼叫 Gemini
+            model = genai.GenerativeModel(selected_model_name)
             response = model.generate_content(prompt)
+
+            if not response or not response.text:
+                raise Exception("API 回傳內容為空。")
+
             ai_answer = response.text.strip()
 
             # 更新額度並存檔
@@ -201,7 +236,7 @@ class TurtleEscape(commands.Cog):
                 f"*(今日剩餘提問額度：{remains}/{max_asks})*"
             )
         except Exception as e:
-            print(f"Gemini API 錯誤: {e}", flush=True)
+            print(f"Gemini API 錯誤詳情: {e}", flush=True)
             await interaction.followup.send(f"⚠️ 連線至 Gemini 時發生錯誤：`{e}`")
 
     # ================= 4. 斜線指令：/解鎖 =================
