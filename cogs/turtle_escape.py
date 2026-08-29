@@ -21,7 +21,7 @@ class TurtleEscape(commands.Cog):
         self.load_team_states() # 開機時自動載入進度
 
     def load_all_stories(self):
-        """動態載入 data/turtle_escape/ 底下的故事 JSON (支援 story_1_ 等前綴)"""
+        """動態載入 data/turtle_escape/ 底下的故事 JSON"""
         data_dir = "./data/turtle_escape"
         self.stories.clear()
         
@@ -33,16 +33,19 @@ class TurtleEscape(commands.Cog):
                         with open(filepath, "r", encoding="utf-8") as f:
                             story_data = json.load(f)
                             
+                            # 支援直接讀取或相容巢狀外層包覆
+                            if len(story_data) == 1 and not any(k in story_data for k in ["story_id", "title", "rules"]):
+                                outer_key = list(story_data.keys())[0]
+                                story_data = story_data[outer_key]
+                            
                             story_id = story_data.get("story_id") or filename[:-5]
                             self.stories[story_id] = story_data
-                            
-                            filename_no_ext = filename[:-5]
-                            if filename_no_ext != story_id:
-                                self.stories[filename_no_ext] = story_data
                                 
-                            print(f"✅ 成功載入故事 [{story_id}] (檔名: {filename})", flush=True)
+                            print(f"✅ 成功載入故事 [{story_id}] 標題: {story_data.get('title', '無標題')} (檔名: {filename})", flush=True)
                     except Exception as e:
                         print(f"❌ 讀取故事檔案失敗 [{filename}]: {e}", flush=True)
+        else:
+            print(f"⚠️ 找不到資料夾: {data_dir}", flush=True)
 
     def save_team_states(self):
         """將隊伍狀態存檔至本地 JSON"""
@@ -54,7 +57,7 @@ class TurtleEscape(commands.Cog):
             print(f"❌ 存檔隊伍狀態失敗: {e}", flush=True)
 
     def load_team_states(self):
-        """從本地 JSON 載入隊伍狀態（防重啟失效）"""
+        """從本地 JSON 載入隊伍狀態"""
         if os.path.exists(SAVE_FILE):
             try:
                 with open(SAVE_FILE, "r", encoding="utf-8") as f:
@@ -65,12 +68,10 @@ class TurtleEscape(commands.Cog):
                 print(f"❌ 載入隊伍紀錄失敗: {e}", flush=True)
 
     def get_working_gemini_model(self):
-        """動態抓取目前 API Key 支援的最佳 Gemini 模型"""
         preferred_models = [
-            "gemini-3.6-flash", 
-            "gemini-3.5-flash", 
             "gemini-2.5-flash", 
-            "gemini-1.5-flash-latest"
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-flash"
         ]
         try:
             available_models = [
@@ -81,7 +82,6 @@ class TurtleEscape(commands.Cog):
             for target in preferred_models:
                 if target in available_models:
                     return target
-            
             flash_models = [m for m in available_models if "flash" in m]
             return flash_models[0] if flash_models else available_models[0]
         except Exception as err:
@@ -92,16 +92,14 @@ class TurtleEscape(commands.Cog):
     @app_commands.command(name="建立隊伍", description="開啟專屬私密討論串開始密室海龜湯")
     @app_commands.describe(故事編號="選擇欲挑戰的故事名稱/ID")
     async def create_team(self, interaction: discord.Interaction, 故事編號: str):
-        # 立即延遲回應，防止 3 秒 Timeout 錯誤
         await interaction.response.defer(ephemeral=True)
 
         try:
             story = self.stories.get(故事編號)
             if not story:
-                await interaction.followup.send(f"❌ 找不到故事『{故事編號}』！請確認故事 ID。", ephemeral=True)
+                await interaction.followup.send(f"❌ 找不到故事『{故事編號}』！請確認故事 ID 或重新整理。", ephemeral=True)
                 return
 
-            # 使用 .get("title", ...) 安全防護，防止 KeyError: 'title'
             story_title = story.get("title", 故事編號)
 
             thread = await interaction.channel.create_thread(
@@ -133,16 +131,16 @@ class TurtleEscape(commands.Cog):
                 f"**海龜湯湯面：**\n> {turtle_surface}\n\n"
                 f"**遊戲指令指南：**\n"
                 f"• `/查看` ：搜尋密室房間內的區域與道具線索\n"
-                f"• `/提問 [問題]` ：向 **阿努比斯** 提問（僅回答：是 / 不是 / 與真相無關，上限 {daily_limit} 次）\n"
-                f"• `/分析推理 [分析]` ：提交你們的推理，讓 **阿努比斯** 評估真相還原度並給予提示\n"
-                f"• `/解鎖 [密碼]` ：輸入密碼驗證解鎖通關\n\n"
-                f"*隊友可直接在此討論串內打字討論，一般聊天不會扣除提問額度！*"
+                f"• `/提問 [問題]` ：向 **阿努比斯** 提問（上限 {daily_limit} 次）\n"
+                f"• `/分析推理 [分析]` ：提交推理，讓 **阿努比斯** 評估還原度\n"
+                f"• `/解鎖 [密碼]` ：輸入密碼驗證解鎖通關"
             )
             await thread.send(intro_text)
         except Exception as e:
             print(f"❌ 建立隊伍失敗: {e}", flush=True)
             await interaction.followup.send(f"⚠️ 建立隊伍時發生錯誤：`{e}`", ephemeral=True)
 
+    # 確保自動完成選單正常運作的核心
     @create_team.autocomplete("故事編號")
     async def story_autocomplete(self, interaction: discord.Interaction, current: str):
         choices = []
@@ -152,15 +150,13 @@ class TurtleEscape(commands.Cog):
             real_id = story.get("story_id", sid)
             title = story.get("title", real_id)
             
-            # 防止別名導致重複選單
             if real_id in seen_ids:
                 continue
             seen_ids.add(real_id)
 
-            # 格式化選單名稱
+            # 讓選單同時顯示英文ID與中文標題
             display_name = f"【{real_id}】{title}"
 
-            # 關鍵字搜尋過濾
             if (current.lower() in display_name.lower() or 
                 current.lower() in real_id.lower()):
                 choices.append(app_commands.Choice(name=display_name, value=real_id))
@@ -223,8 +219,7 @@ class TurtleEscape(commands.Cog):
 
         if state["daily_ask_count"] >= max_asks:
             await interaction.response.send_message(
-                f"⚠️ **今日提問額度已用盡 ({max_asks}/{max_asks})！**\n"
-                f"請整理已有線索與隊友討論，使用 `/分析推理` 確認方向，或使用 `/解鎖 [密碼]` 嘗試通關。", 
+                f"⚠️ **今日提問額度已用盡 ({max_asks}/{max_asks})！**", 
                 ephemeral=True
             )
             return
@@ -232,34 +227,21 @@ class TurtleEscape(commands.Cog):
         await interaction.response.defer()
 
         try:
-            api_key = os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                await interaction.followup.send("⚠️ 尚未偵測到 `GEMINI_API_KEY`，請檢查環境變數。")
-                return
-
-            genai.configure(api_key=api_key)
-            
-            truth_summary = story.get("truth", {}).get("summary") or story.get("turtle_soup", {}).get("truth", "")
+            truth_summary = story.get("truth", {}).get("summary", "")
             system_prompt = (
                 f"你現在是海龜湯遊戲的審判者『阿努比斯』。\n"
                 f"完整真相：【{truth_summary}】\n"
-                f"規則：請根據真相嚴格回答玩家提出的問題。你只能回答『是』、『不是』或『與真相無關』這三種答案之一，嚴禁提供額外的解釋或暴雷。"
+                f"規則：請根據真相嚴格回答玩家提出的問題。你只能回答『是』、『不是』或『與真相無關』。"
             )
 
             prompt = f"{system_prompt}\n\n玩家提出的問題：『{問題}』"
-            selected_model_name = self.get_working_gemini_model()
-
-            model = genai.GenerativeModel(selected_model_name)
+            model = genai.GenerativeModel(self.get_working_gemini_model())
             response = model.generate_content(prompt)
 
-            if not response or not response.text:
-                raise Exception("API 回傳內容為空。")
-
-            ai_answer = response.text.strip()
+            ai_answer = response.text.strip() if response and response.text else "與真相無關"
 
             state["daily_ask_count"] += 1
             self.save_team_states()
-
             remains = max_asks - state["daily_ask_count"]
 
             await interaction.followup.send(
@@ -268,7 +250,6 @@ class TurtleEscape(commands.Cog):
                 f"*(今日剩餘提問額度：{remains}/{max_asks})*"
             )
         except Exception as e:
-            print(f"Gemini API 錯誤詳情: {e}", flush=True)
             await interaction.followup.send(f"⚠️ 連線至 Gemini 時發生錯誤：`{e}`")
 
     # ================= 4. 斜線指令：/分析推理 =================
@@ -282,50 +263,33 @@ class TurtleEscape(commands.Cog):
 
         story = self.stories.get(state["story_id"])
         truth_info = story.get("truth", {})
-        truth_summary = truth_info.get("summary") or story.get("turtle_soup", {}).get("truth", "無真相紀錄")
+        truth_summary = truth_info.get("summary", "無真相紀錄")
         keywords = truth_info.get("keywords", [])
 
         await interaction.response.defer()
 
         try:
-            api_key = os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                await interaction.followup.send("⚠️ 尚未偵測到 `GEMINI_API_KEY`，請檢查環境變數。")
-                return
-
-            genai.configure(api_key=api_key)
-
             analysis_prompt = f"""
 你是一名海龜湯遊戲的掌秤審判者『阿努比斯』。
+【故事真實真相】: {truth_summary}
+【核心關鍵字】: {', '.join(keywords)}
+【玩家提交的推理】: {你的推理}
 
-【故事真實真相】:
-{truth_summary}
-
-【核心關鍵字列表】:
-{', '.join(keywords)}
-
-【玩家提交的推理分析】:
-{你的推理}
-
-請嚴格按照以下格式回覆玩家：
-1. **真相還原度**：[給出 0% ~ 100% 的分數]
-2. **已推出的核心重點**：[條列式列出玩家猜對的部分]
-3. **尚未揭開的盲點/遺漏**：[條列式給予適度提示，但切勿直接揭曉全部真相]
-4. **阿努比斯的審判建議**：[給予 1 句話引導，若還原度高可提醒尋找密碼並使用 `/解鎖`]
+請依序回覆：
+1. **真相還原度**：[0% ~ 100%]
+2. **已推出的重點**：[列出猜對部分]
+3. **尚未揭開的盲點**：[適度提示]
+4. **審判建議**：[1句話引導]
 """
-            model_name = self.get_working_gemini_model()
-            model = genai.GenerativeModel(model_name)
+            model = genai.GenerativeModel(self.get_working_gemini_model())
             response = model.generate_content(analysis_prompt)
-
-            ai_analysis = response.text.strip()
+            ai_analysis = response.text.strip() if response and response.text else "無法解析"
 
             await interaction.followup.send(
                 f"𓄿 **【阿努比斯 - 審判推理報告】**\n"
-                f"**玩家提出的分析：**\n> {你的推理}\n\n"
-                f"{ai_analysis}"
+                f"**玩家分析：**\n> {你的推理}\n\n{ai_analysis}"
             )
         except Exception as e:
-            print(f"Gemini API 分析錯誤: {e}", flush=True)
             await interaction.followup.send(f"⚠️ 進行推理分析時發生錯誤：`{e}`")
 
     # ================= 5. 斜線指令：/解鎖 =================
@@ -338,34 +302,24 @@ class TurtleEscape(commands.Cog):
             return
 
         story = self.stories.get(state["story_id"])
-        if not story:
-            await interaction.response.send_message("⚠️ 找不到故事資料！", ephemeral=True)
-            return
-
-        correct_code = str(
-            story.get("rules", {}).get("unlock_code") or 
-            story.get("turtle_soup", {}).get("password", "")
-        ).strip()
+        correct_code = str(story.get("rules", {}).get("unlock_code", "")).strip()
 
         if 密碼.strip() == correct_code:
             state["unlocked"] = True
             self.save_team_states()
             
-            truth_summary = story.get("truth", {}).get("summary") or story.get("turtle_soup", {}).get("truth", "恭喜通關！")
-            
+            truth_summary = story.get("truth", {}).get("summary", "恭喜通關！")
             embed = discord.Embed(
                 title="🎉 【解鎖成功！恭喜通關】",
-                description=f"恭喜隊伍 **{interaction.channel.name}** 順利輸入正確密碼！",
+                description=f"恭喜隊伍順利輸入正確密碼！",
                 color=discord.Color.green()
             )
             embed.add_field(name="🔑 正確密碼", value=f"`{correct_code}`", inline=False)
-            embed.add_field(name="📜 海龜湯真相揭曉", value=truth_summary, inline=False)
-            embed.set_footer(text="感謝遊玩！討論串可繼續留存討論或由管理員關閉。")
-
+            embed.add_field(name="📜 真相揭曉", value=truth_summary, inline=False)
             await interaction.response.send_message(embed=embed)
         else:
             await interaction.response.send_message(
-                f"❌ **密碼錯誤！** (`{密碼}`) 無法開啟鎖頭，請觀察 `/查看` 獲得的線索或用 `/分析推理` 獲取協助！", 
+                f"❌ **密碼錯誤！** (`{密碼}`) 燈號閃爍紅燈，請重新思考！", 
                 ephemeral=True
             )
 
