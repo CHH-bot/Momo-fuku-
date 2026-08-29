@@ -69,6 +69,8 @@ class TurtleEscape(commands.Cog):
 
     def get_working_gemini_model(self):
         preferred_models = [
+            "gemini-3.6-flash", 
+            "gemini-3.5-flash", 
             "gemini-2.5-flash", 
             "gemini-1.5-flash-latest",
             "gemini-1.5-flash"
@@ -86,7 +88,7 @@ class TurtleEscape(commands.Cog):
             return flash_models[0] if flash_models else available_models[0]
         except Exception as err:
             print(f"無法獲取模型列表，使用預設值: {err}", flush=True)
-            return preferred_models[0]
+            return "gemini-3.6-flash"
 
     # ================= 1. 斜線指令：/建立隊伍 =================
     @app_commands.command(name="建立隊伍", description="開啟專屬私密討論串開始密室海龜湯")
@@ -140,7 +142,7 @@ class TurtleEscape(commands.Cog):
             print(f"❌ 建立隊伍失敗: {e}", flush=True)
             await interaction.followup.send(f"⚠️ 建立隊伍時發生錯誤：`{e}`", ephemeral=True)
 
-    # 確保自動完成選單正常運作的核心
+    # 確保自動完成選單只顯示中文標題
     @create_team.autocomplete("故事編號")
     async def story_autocomplete(self, interaction: discord.Interaction, current: str):
         choices = []
@@ -154,8 +156,8 @@ class TurtleEscape(commands.Cog):
                 continue
             seen_ids.add(real_id)
 
-            # 讓選單同時顯示英文ID與中文標題
-            display_name = f"【{real_id}】{title}"
+            # 只顯示中文標題，移除英文 ID 顯示
+            display_name = title
 
             if (current.lower() in display_name.lower() or 
                 current.lower() in real_id.lower()):
