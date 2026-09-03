@@ -89,12 +89,10 @@ class TurtleEscape(commands.Cog):
         except Exception as err:
             print(f"無法獲取模型列表，使用預設值: {err}", flush=True)
             return "gemini-3.6-flash"
-
     # ================= 1. 斜線指令：/建立隊伍 =================
     @app_commands.command(name="建立隊伍", description="開啟專屬私密討論串開始密室海龜湯")
     @app_commands.describe(故事編號="選擇欲挑戰的故事名稱/ID")
     async def create_team(self, interaction: discord.Interaction, 故事編號: str):
-        # 移除了 ephemeral=True，讓「您已經開啟挑戰」的訊息公開顯示（不自動刪除）
         await interaction.response.defer()
 
         try:
@@ -127,10 +125,10 @@ class TurtleEscape(commands.Cog):
                 color=discord.Color.blue()
             )
             
-                # 支援從 JSON 讀取圖片連結
-    image_url = story.get("image_url")
-    if image_url:
-        embed.set_image(url=image_url)
+            # 讀取 JSON 內的 image_url 網址
+            image_url = story.get("image_url")
+            if image_url:
+                embed.set_image(url=image_url)
 
             await interaction.followup.send(embed=embed)
 
@@ -148,31 +146,10 @@ class TurtleEscape(commands.Cog):
                 f"• `/解鎖 [密碼]` ：輸入密碼驗證解鎖通關"
             )
             await thread.send(intro_text)
+            
         except Exception as e:
             print(f"❌ 建立隊伍失敗: {e}", flush=True)
             await interaction.followup.send(f"⚠️ 建立隊伍時發生錯誤：`{e}`")
-
-    # 確保自動完成選單只顯示中文標題
-    @create_team.autocomplete("故事編號")
-    async def story_autocomplete(self, interaction: discord.Interaction, current: str):
-        choices = []
-        seen_ids = set()
-
-        for sid, story in self.stories.items():
-            real_id = story.get("story_id", sid)
-            title = story.get("title", real_id)
-            
-            if real_id in seen_ids:
-                continue
-            seen_ids.add(real_id)
-
-            display_name = title
-
-            if (current.lower() in display_name.lower() or 
-                current.lower() in real_id.lower()):
-                choices.append(app_commands.Choice(name=display_name, value=real_id))
-
-        return choices[:25]
 
     # ================= 2. 斜線指令：/查看 =================
     @app_commands.command(name="查看", description="檢視密室內可搜尋的區域與道具線索")
