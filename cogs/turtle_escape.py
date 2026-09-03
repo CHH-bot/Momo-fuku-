@@ -127,10 +127,10 @@ class TurtleEscape(commands.Cog):
                 color=discord.Color.blue()
             )
             
-            # 支援從 JSON 讀取圖片連結 (例如在故事 JSON 內加上 `"image_url": "圖片網址"`)
-            image_url = story.get("image_url")
-            if image_url:https://raw.githubusercontent.com/CHH-bot/Momo-fuku-/refs/heads/main/data/images/1242D785-DC76-43C1-A3F7-0D869A70140F.gif?token=GHSAT0AAAAAAEHDCOUEPNXL4YJOWOGEHNXQ2UZTIXQ
-                embed.set_image(url=image_url)
+                # 支援從 JSON 讀取圖片連結
+    image_url = story.get("image_url")
+    if image_url:
+        embed.set_image(url=image_url)
 
             await interaction.followup.send(embed=embed)
 
