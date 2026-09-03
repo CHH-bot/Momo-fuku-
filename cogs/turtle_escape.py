@@ -94,12 +94,13 @@ class TurtleEscape(commands.Cog):
     @app_commands.command(name="建立隊伍", description="開啟專屬私密討論串開始密室海龜湯")
     @app_commands.describe(故事編號="選擇欲挑戰的故事名稱/ID")
     async def create_team(self, interaction: discord.Interaction, 故事編號: str):
-        await interaction.response.defer(ephemeral=True)
+        # 移除了 ephemeral=True，讓「您已經開啟挑戰」的訊息公開顯示（不自動刪除）
+        await interaction.response.defer()
 
         try:
             story = self.stories.get(故事編號)
             if not story:
-                await interaction.followup.send(f"❌ 找不到故事『{故事編號}』！請確認故事 ID 或重新整理。", ephemeral=True)
+                await interaction.followup.send(f"❌ 找不到故事『{故事編號}』！請確認故事 ID 或重新整理。")
                 return
 
             story_title = story.get("title", 故事編號)
@@ -119,10 +120,19 @@ class TurtleEscape(commands.Cog):
             }
             self.save_team_states()
 
-            await interaction.followup.send(
-                f"✅ 成功建立密室討論串！請前往 {thread.mention} 開始遊戲！", 
-                ephemeral=True
+            # 建立包含 Embed 與圖片的組隊成功訊息
+            embed = discord.Embed(
+                title=f"🔒 【{story_title}】隊伍建立成功",
+                description=f"您已經開啟挑戰\n\n👉 請前往 {thread.mention} 開始遊戲！",
+                color=discord.Color.blue()
             )
+            
+            # 支援從 JSON 讀取圖片連結 (例如在故事 JSON 內加上 `"image_url": "圖片網址"`)
+            image_url = story.get("image_url")
+            if image_url:
+                embed.set_image(url=image_url)
+
+            await interaction.followup.send(embed=embed)
 
             daily_limit = story.get("rules", {}).get("daily_ask_limit", 3)
             turtle_surface = story.get("turtle_soup", {}).get("surface", "請透過 `/查看` 探索現場...")
@@ -140,7 +150,7 @@ class TurtleEscape(commands.Cog):
             await thread.send(intro_text)
         except Exception as e:
             print(f"❌ 建立隊伍失敗: {e}", flush=True)
-            await interaction.followup.send(f"⚠️ 建立隊伍時發生錯誤：`{e}`", ephemeral=True)
+            await interaction.followup.send(f"⚠️ 建立隊伍時發生錯誤：`{e}`")
 
     # 確保自動完成選單只顯示中文標題
     @create_team.autocomplete("故事編號")
@@ -156,7 +166,6 @@ class TurtleEscape(commands.Cog):
                 continue
             seen_ids.add(real_id)
 
-            # 只顯示中文標題，移除英文 ID 顯示
             display_name = title
 
             if (current.lower() in display_name.lower() or 
