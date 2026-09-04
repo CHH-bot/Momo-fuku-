@@ -89,6 +89,7 @@ class TurtleEscape(commands.Cog):
         except Exception as err:
             print(f"無法獲取模型列表，使用預設值: {err}", flush=True)
             return "gemini-3.6-flash"
+
     # ================= 1. 斜線指令：/建立隊伍 =================
     @app_commands.command(name="建立隊伍", description="開啟專屬私密討論串開始密室海龜湯")
     @app_commands.describe(故事編號="選擇欲挑戰的故事名稱/ID")
@@ -150,6 +151,28 @@ class TurtleEscape(commands.Cog):
         except Exception as e:
             print(f"❌ 建立隊伍失敗: {e}", flush=True)
             await interaction.followup.send(f"⚠️ 建立隊伍時發生錯誤：`{e}`")
+
+    # 確保自動完成選單能夠正確讀取並顯示中文標題
+    @create_team.autocomplete("故事編號")
+    async def story_autocomplete(self, interaction: discord.Interaction, current: str):
+        choices = []
+        seen_ids = set()
+
+        for sid, story in self.stories.items():
+            real_id = story.get("story_id", sid)
+            title = story.get("title", real_id)
+            
+            if real_id in seen_ids:
+                continue
+            seen_ids.add(real_id)
+
+            display_name = title
+
+            if (current.lower() in display_name.lower() or 
+                current.lower() in real_id.lower()):
+                choices.append(app_commands.Choice(name=display_name, value=real_id))
+
+        return choices[:25]
 
     # ================= 2. 斜線指令：/查看 =================
     @app_commands.command(name="查看", description="檢視密室內可搜尋的區域與道具線索")
