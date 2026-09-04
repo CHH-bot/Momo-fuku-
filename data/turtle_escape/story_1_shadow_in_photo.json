@@ -1,7 +1,7 @@
 {
   "story_id": "shadow_in_photo",
   "title": "照片裡的側影",
-  "image_url": "https://raw.githubusercontent.com/CHH-bot/Momo-fuku-/main/data/images/shadow_in_photo.png",
+  "image_url": "https://raw.githubusercontent.com/CHH-bot/Momo-fuku-/main/data/images/1.gif",
   "rules": {
     "daily_ask_limit": 3,
     "unlock_code": "0412"
